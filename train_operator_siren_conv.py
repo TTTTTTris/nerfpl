@@ -157,87 +157,12 @@ class NeRFSystem(LightningModule):
 
         image_pred1 = image_pred1.view(-1, w1, h1)
         image_pred2 = image_pred2.view(-1, w1, h1)
-        # image_pred1 = torch.pi/4*image_pred1.view(-1, w, h)
-        # image_pred2 = torch.pi/4*image_pred2.view(-1, w, h)
 
         # operation
         observation_pred = operation(image_pred1, image_pred2, E, self.hparams.operator, idx=batch_idx)
- 
-        ## A
-        # flag_origin2A = True
-        # flag_origin2B = False
 
-        # B
-        # flag_origin2A = False
-        # flag_origin2B = True
-
-        ## 
-        flag_origin2A = False
-        flag_origin2B = False
-
-        if flag_origin2A == True:
-            if self.hparams.operator == 'add': 
-                # loss = ((C-B) - A)^2
-                if batch_idx == 0:
-                    image1_reconstruct = observation[0] - image_pred2
-                elif batch_idx == 1:
-                    image1_reconstruct = observation[0] - image_pred2 * 2
-            elif self.hparams.operator == 'sub': 
-                if batch_idx == 0:
-                    image1_reconstruct = observation[0] + image_pred2
-                elif batch_idx == 1:
-                    image1_reconstruct = observation[0] + image_pred2 * 2
-            elif self.hparams.operator == 'mul': 
-                if batch_idx == 0:
-                    image1_reconstruct = observation[0] / (image_pred2 + 0.5) - 0.5
-                elif batch_idx == 1:
-                    image1_reconstruct = observation[0] / (image_pred2 + 1) - 0.5
-            elif self.hparams.operator == 'div':
-                # loss = ((B_pred * A/B) - A_pred)^2
-                # image1_reconstruct = operation(observation[0], image_pred2, 'mul', idx=batch_idx)
-                if batch_idx == 0:
-                    image1_reconstruct = observation[0] * (image_pred2 + 0.5)
-                elif batch_idx == 1:
-                    image1_reconstruct = observation[0] * (image_pred2 + 1)
-            elif self.hparams.operator == 'conv': 
-                    # print(observation.size())
-                    image1_reconstruct = F.conv_transpose2d(observation.unsqueeze(0), E)
-                    # print(image1_reconstruct.size())
-
-            log['train/loss'] = loss = self.loss(image1_reconstruct, image_pred1)       
-
-        elif flag_origin2B == True:
-            # todo
-            if self.hparams.operator == 'add': 
-                # loss = ((C-A) - B)^2
-                if batch_idx == 0:
-                    image2_reconstruct = observation[0] - image_pred1
-                elif batch_idx == 1:
-                    image2_reconstruct = (observation[0] - image_pred1) / 2
-            elif self.hparams.operator == 'sub': 
-                if batch_idx == 0:
-                    image2_reconstruct = image_pred1 - observation[0]
-                elif batch_idx == 1:
-                    image2_reconstruct = (image_pred1 - observation[0]) / 2
-            elif self.hparams.operator == 'mul': 
-                if batch_idx == 0:
-                    image2_reconstruct = observation[0] / (image_pred1 + 0.5) - 0.5
-                elif batch_idx == 1:
-                    image2_reconstruct = observation[0] / (image_pred1 + 0.5) - 1
-            if self.hparams.operator == 'sin': 
-                image2_reconstruct = torch.asin(observation[0])
-            if self.hparams.operator == 'cos': 
-                image2_reconstruct = torch.acos(observation[0])
-            if self.hparams.operator == 'sinx': 
-                image2_reconstruct = torch.asin(observation[0])
-            if self.hparams.operator == 'cosx': 
-                image2_reconstruct = torch.acos(observation[0])
-            log['train/loss'] = loss = self.loss(image2_reconstruct, image_pred2)       
-        else:
-            # loss
-            log['train/loss'] = loss = self.loss(observation_pred, observation)
-
-        # print(batch_idx, torch.max(observation))
+        # loss
+        log['train/loss'] = loss =  self.loss(observation_pred, observation) 
 
         # psnr
         with torch.no_grad():

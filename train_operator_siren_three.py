@@ -76,13 +76,16 @@ class NeRFSystem(LightningModule):
         elif self.hparams.modelType == 'MLP+PE':
             self.freq_A = 20
             self.freq_B = 20
+            self.freq_C = 20 # pluscosE
             self.embedding_A = Embedding(2, self.freq_A) 
             self.embedding_B = Embedding(2, self.freq_B) 
-            self.embeddings = [self.embedding_A, self.embedding_B]
+            self.embedding_C = Embedding(2, self.freq_C) # pluscosE
+            self.embeddings = [self.embedding_A, self.embedding_B, self.embedding_C] # pluscosE
             self.model1 = MLP(in_channels_xy=self.freq_A*2*2+2, D=self.hparams.hidden_layers, W=self.hparams.hidden_features)
             self.model2 = MLP(in_channels_xy=self.freq_B*2*2+2, D=self.hparams.hidden_layers, W=self.hparams.hidden_features)
+            self.model3 = MLP(in_channels_xy=self.freq_B*2*2+2, D=self.hparams.hidden_layers, W=self.hparams.hidden_features) # pluscosE
        
-        self.models = [self.model1, self.model2]
+        self.models = [self.model1, self.model2, self.model3] # pluscosE
         self.batch_cnt = 0
                 
     def decode_train_batch(self, batch):
@@ -113,13 +116,16 @@ class NeRFSystem(LightningModule):
             elif self.hparams.modelType == 'MLP+PE':
                 res1 = self.models[0](self.embeddings[0](rays_chunk))
                 res2 = self.models[1](self.embeddings[1](rays_chunk))
+                res3 = self.models[2](self.embeddings[2](rays_chunk)) # pluscosE
 
             results_amp.append(res1)
             results_phase.append(res2)
+            results_C.append(res3)
 
         results_amp = torch.cat(results_amp, dim=0)
         results_phase = torch.cat(results_phase, dim=0)
-        return results_amp, results_phase
+        results_C = torch.cat(results_C, dim=0)
+        return results_amp, results_phase, results_C
 
     def prepare_data(self):     # OK
         dataset = dataset_dict['operator']
@@ -143,10 +149,7 @@ class NeRFSystem(LightningModule):
         log = {'lr': get_learning_rate(self.optimizer)}
                 
         grid1, grid2, observation, gt1, gt2 = self.decode_train_batch(batch)
-
-        # [1, 178^2, 2]
-        # print(grid1.shape)
-        image_pred1, image_pred2 = self(grid1)          # [batch, h, w]
+        image_pred1, image_pred2, image_pred3 = self(grid1)          # pluscosE
 
         # pred object
         w = observation.shape[1]
@@ -156,20 +159,16 @@ class NeRFSystem(LightningModule):
 
         image_pred1 = image_pred1.view(-1, w, h)
         image_pred2 = image_pred2.view(-1, w, h)
+        image_pred3 = image_pred3.view(-1, w, h) # pluscosE
 
         # operation
-        observation_pred = operation(image_pred1, image_pred2, 0, self.hparams.operator, idx=batch_idx)
+        observation_pred = operation(image_pred1, image_pred2, image_pred3, self.hparams.operator, idx=batch_idx) # pluscosE
 
         # loss
-        if observation_pred.dtype == torch.float32:
-            log['train/loss'] = loss =  self.loss(observation_pred, observation) 
+        if batch_idx == 2:
+            log['train/loss'] = loss =  self.loss(observation_pred, image_pred1+1) 
         else:
-            # real+imag
-            # loss1 = self.loss(torch.real(observation_pred), torch.real(observation))
-            # loss2 = self.loss(torch.imag(observation_pred), torch.imag(observation))
-            # log['train/loss'] = loss =  loss1+loss2
-            # mod
-            log['train/loss'] = loss =  self.loss(torch.abs(observation_pred), torch.abs(observation))
+            log['train/loss'] = loss =  self.loss(observation_pred, observation) 
 
         # psnr
         with torch.no_grad():
@@ -178,45 +177,45 @@ class NeRFSystem(LightningModule):
             log['train/psnr1'] = psnr1
             log['train/psnr2'] = psnr2
 
-        # if self.batch_cnt == 0 or self.batch_cnt % 1000 == 999:
-        #     fig, axes = plt.subplots(1, 6, figsize=(18,18)) # (w,h)
-        #     axes[0].imshow(gt1.cpu().view(w,h).detach().numpy())
-        #     axes[0].set_title('gt1')
-        #     axes[1].imshow(image_pred1.cpu().view(w,h).detach().numpy())
-        #     axes[1].set_title('psnr: %0.2f'%(psnr1))
+        if self.batch_cnt == 0 or self.batch_cnt % 1000 == 999:
+            fig, axes = plt.subplots(1, 6, figsize=(18,18)) # (w,h)
+            axes[0].imshow(gt1.cpu().view(w,h).detach().numpy())
+            axes[0].set_title('gt1')
+            axes[1].imshow(image_pred1.cpu().view(w,h).detach().numpy())
+            axes[1].set_title('psnr: %0.2f'%(psnr1))
 
-        #     axes[2].imshow(gt2.cpu().view(w,h).detach().numpy())
-        #     axes[2].set_title('gt2')
-        #     axes[3].imshow(image_pred2.cpu().view(w,h).detach().numpy())
-        #     axes[3].set_title('psnr: %0.2f'%(psnr2))
+            axes[2].imshow(gt2.cpu().view(w,h).detach().numpy())
+            axes[2].set_title('gt2')
+            axes[3].imshow(image_pred2.cpu().view(w,h).detach().numpy())
+            axes[3].set_title('psnr: %0.2f'%(psnr2))
 
-        #     if self.hparams.operator is not 'fit':
-        #         axes[4].imshow(observation.cpu().view(w,h).detach().numpy())
-        #         axes[4].set_title('gt1 ' + self.hparams.operator + ' gt2')
-        #         axes[5].imshow(observation_pred.cpu().view(w,h).detach().numpy())
-        #         axes[5].set_title('loss: %0.6f'%(loss))
-        #         num = 2
-        #     else:
-        #         axes[4].imshow(gt1.cpu().view(w,h).detach().numpy())
-        #         axes[4].set_title('gt1')
-        #         axes[5].imshow(image_pred1.cpu().view(w,h).detach().numpy())
-        #         axes[5].set_title('loss_total: %0.6f'%(loss))
-        #         num = 1
+            if self.hparams.operator is not 'fit':
+                axes[4].imshow(observation.cpu().view(w,h).detach().numpy())
+                axes[4].set_title('gt1 ' + self.hparams.operator + ' gt2')
+                axes[5].imshow(observation_pred.cpu().view(w,h).detach().numpy())
+                axes[5].set_title('loss: %0.6f'%(loss))
+                num = 2
+            else:
+                axes[4].imshow(gt1.cpu().view(w,h).detach().numpy())
+                axes[4].set_title('gt1')
+                axes[5].imshow(image_pred1.cpu().view(w,h).detach().numpy())
+                axes[5].set_title('loss_total: %0.6f'%(loss))
+                num = 1
                     
-        #     path_dir = os.path.join(self.hparams.root_dir, 'image_out', self.hparams.exp_name)
-        #     save_path = '%s/%s_%dx%d_epochs_%06d_%s.png'%(
-        #         path_dir, 
-        #         self.hparams.modelType, 
-        #         self.hparams.hidden_layers, 
-        #         self.hparams.hidden_features, 
-        #         self.batch_cnt/num, 
-        #         self.hparams.operator)
+            path_dir = os.path.join(self.hparams.root_dir, 'image_out', self.hparams.exp_name)
+            save_path = '%s/%s_%dx%d_epochs_%06d_%s.png'%(
+                path_dir, 
+                self.hparams.modelType, 
+                self.hparams.hidden_layers, 
+                self.hparams.hidden_features, 
+                self.batch_cnt/num, 
+                self.hparams.operator)
 
-        #     plt.savefig(save_path)
-        #     print(save_path)
-        #     # print('saved!')
-        #     # plt.show()
-        #     plt.close()
+            plt.savefig(save_path)
+            print(save_path)
+            # print('saved!')
+            # plt.show()
+            plt.close()
 
         self.batch_cnt = self.batch_cnt + 1
 
@@ -238,7 +237,7 @@ if __name__ == '__main__':
     hparams.hidden_features = 256
 
     #
-    hparams.operator    = 'exp' # fit, add, sub, mul, div, ln, etc 
+    hparams.operator    = 'pluscosE' # fit, add, sub, mul, div, ln, etc 
     hparams.modelType   = 'MLP+PE' # MLP, MLP+PE, SIREN
 
     # hparams.exp_name    = 'exp_lr0.001'
